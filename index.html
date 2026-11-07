@@ -114,7 +114,7 @@ input:focus-visible,button:focus-visible,summary:focus-visible,select:focus-visi
   <details>
     <summary>换模型对比（当前硬件）›</summary>
     <div class="scroll"><table><thead><tr><th>模型</th><th>显存</th><th>带宽</th><th>算力</th><th>最少</th></tr></thead><tbody id="cmp"></tbody></table></div>
-    <div class="inner-note">显存 GB、带宽 TB/s、算力 TFLOPS。每个模型取与当前同一类的量化版本（没有这一类时取官方 FP8），KV 精度相同。</div>
+    <div class="inner-note">显存 GB、带宽 TB/s、算力 TFLOPS。每个模型取与当前同一类的量化版本（没有这一类时先取相近的 4bit 版本，再退到官方 FP8），KV 精度相同。</div>
   </details>
 
   <h2>需求规格（与硬件无关）</h2>
@@ -172,7 +172,7 @@ input:focus-visible,button:focus-visible,summary:focus-visible,select:focus-visi
 </main>
 <script>
 (function(){
-var VER="v2.3 · 2026-11-07";
+var VER="v2.4 · 2026-11-07";
 var DEF=[
  {id:"light",name:"轻度问答",note:"翻译、查询、短对话",users:10,pres:0.7,rph:6,ctx:1500,nw:500,out:400},
  {id:"doc",name:"文档/知识问答",note:"贴文档、改写、分析",users:30,pres:0.8,rph:12,ctx:6000,nw:1500,out:500},
@@ -184,22 +184,22 @@ var DEF=[
 var PF=[["pres","在线率"],["rph","次/人·时"],["ctx","上下文"],["nw","新增"],["out","输出"]];
 /* 模型预设（2026-11 按 Hugging Face 官方 config.json、模型卡、文件大小核对）
    tot 文件里的参数（十亿，含 n-gram/Engram 查表参数和 MTP）；act 每 token 激活（actP = prefill 时激活，缺省同 act）
-   den 每步必读的非路由参数；exp 路由专家参数；r = 每 token 选中专家数 ÷ 专家总数（稠密：exp=0）
+   den 每步必读的非路由参数 = 模型卡激活参数 − 激活的路由专家（不含视觉编码器、MTP、输入嵌入查表）；exp 路由专家参数；r = 每 token 选中专家数 ÷ 专家总数（稠密：exp=0）
    kv  全注意力层 KV，BF16 下 KB/token（线性注意力层不随长度增长）；kvFix 官方固定格式，不随 KV 精度变
    idx 稀疏注意力索引器 key 缓存 KB/token；st 每条序列的固定状态 MB（线性注意力状态 / 滑窗 KV）
    attn 全注意力层每"被看到的 token"的计算量 M FLOPs；cap 稀疏注意力每个 query 最多看的 token 数
    q 量化版本：k 类别，gb = HF 上实际文件大小 */
 var MODELS=[
- {id:"qwen38-27b",name:"Qwen3.8-27B（稠密·线性混合）",tot:27.8,act:27.8,den:27.8,exp:0,r:1,kv:64,st:78,attn:0.39,ctx:256,
-  q:[{k:"bf16",n:"BF16 原版 55.6GB",gb:55.56},{k:"fp8",n:"FP8 官方 30.9GB",gb:30.86},{k:"int4",n:"AWQ INT4 社区 21.0GB",gb:21.02},{k:"gguf4",n:"GGUF Q4_K_M 16.5GB",gb:16.46}]},
- {id:"qwen38-flash-next",name:"Qwen3.8-Flash-Next A6B（MoE·稀疏+线性）",tot:180,act:6,den:4.2,exp:120.8,r:10/512,kv:24,idx:0.75,st:59,attn:0.29,cap:2048,ctx:256,
-  q:[{k:"bf16",n:"BF16 原版 360GB",gb:360.00},{k:"fp8",n:"FP8 官方 185GB",gb:185.49},{k:"int4",n:"NVFP4 NVIDIA 133GB",gb:132.68},{k:"gguf4",n:"GGUF UD-Q4_K_XL 111GB",gb:111.33}]},
- {id:"qwen36-35b-a3b",name:"Qwen3.6-35B-A3B（MoE·线性混合）",tot:36,act:3,den:3.7,exp:32.2,r:8/256,kv:20,st:33,attn:0.16,ctx:256,
-  q:[{k:"bf16",n:"BF16 原版 71.9GB",gb:71.90},{k:"fp8",n:"FP8 官方 37.5GB",gb:37.46},{k:"int4",n:"AWQ 4bit 社区 25.0GB",gb:24.97},{k:"gguf4",n:"GGUF UD-Q4_K_M 22.1GB",gb:22.13}]},
- {id:"glm53-flash",name:"GLM-5.3-Flash 320B-A18B（MoE·稀疏+线性）",tot:321.3,act:18,den:9.6,exp:304.4,r:8/288,kv:11,idx:0.69,st:76,attn:0.72,cap:2048,ctx:1024,
-  q:[{k:"bf16",n:"BF16 官方 643GB",gb:642.65},{k:"fp8",n:"FP8 官方 328GB",gb:328.33},{k:"gguf4",n:"GGUF UD-Q4_K_XL 200GB",gb:199.71}]},
- {id:"ds-v41-flash",name:"DeepSeek-V4.1-Flash（MoE·CSA2）",tot:763,act:16,actP:8,den:8.4,exp:543.6,r:6/384,kv:0.87,kvFix:true,st:5,attn:5.24,cap:640,ctx:1024,
-  q:[{k:"fp8",n:"FP8+FP4专家 官方 510GB",gb:510.3},{k:"int4",n:"NVFP4 NVIDIA 429GB",gb:429.0},{k:"q2",n:"GGUF Q2 社区 366GB",gb:365.7}]},
+ {id:"qwen38-27b",name:"Qwen3.8-27B（稠密·线性混合）",tot:27.8,act:27,den:27,exp:0,r:1,kv:64,st:78,attn:0.39,ctxT:1000000,nat:262144,
+  q:[{k:"bf16",n:"BF16 原版 55.6GB",gb:55.56},{k:"fp8",n:"FP8 官方 30.9GB",gb:30.87},{k:"int4",n:"AWQ INT4 cyankiwi 21.0GB",gb:21.02},{k:"nvfp4",n:"NVFP4 unsloth 23.4GB",gb:23.42},{k:"gguf4",n:"GGUF UD-Q4_K_M 16.5GB",gb:16.46}]},
+ {id:"qwen38-flash-next",name:"Qwen3.8-Flash-Next A6B（MoE·稀疏+线性）",tot:180,act:6,den:3.6,exp:120.8,r:10/512,kv:24,idx:0.75,st:59,attn:0.29,cap:2048,ctxT:1000000,nat:262144,
+  q:[{k:"bf16",n:"BF16 原版 360GB",gb:360.00},{k:"fp8",n:"FP8 官方 185.5GB",gb:185.52},{k:"nvfp4",n:"NVFP4 NVIDIA 132.7GB",gb:132.68},{k:"gguf4",n:"GGUF UD-Q4_K_XL 111.3GB",gb:111.33}]},
+ {id:"qwen36-35b-a3b",name:"Qwen3.6-35B-A3B（MoE·线性混合）",tot:36,act:3,den:2.0,exp:32.2,r:8/256,kv:20,st:33,attn:0.16,ctxT:1010000,nat:262144,
+  q:[{k:"bf16",n:"BF16 原版 71.9GB",gb:71.90},{k:"fp8",n:"FP8 官方 37.5GB",gb:37.46},{k:"nvfp4",n:"NVFP4 NVIDIA 23.4GB",gb:23.42},{k:"int4",n:"AWQ QuantTrio 25.5GB",gb:25.46},{k:"gguf4",n:"GGUF UD-Q4_K_M 22.1GB",gb:22.13}]},
+ {id:"glm53-flash",name:"GLM-5.3-Flash 320B-A18B（MoE·稀疏+线性）",tot:321.3,act:18,den:9.5,exp:304.4,r:8/288,kv:11,idx:0.69,st:76,attn:0.72,cap:2048,ctxT:1048576,
+  q:[{k:"bf16",n:"BF16 官方 642.7GB",gb:642.65},{k:"fp8",n:"FP8 官方 328.3GB",gb:328.34},{k:"nvfp4",n:"NVFP4 NVIDIA 204.4GB",gb:204.44},{k:"gguf4",n:"GGUF UD-Q4_K_XL 199.7GB",gb:199.71}]},
+ {id:"ds-v41-flash",name:"DeepSeek-V4.1-Flash（MoE·CSA2）",tot:763,act:16,actP:8,den:7.5,exp:543.6,r:6/384,kv:0.87,kvFix:true,st:5,attn:5.24,cap:640,ctxT:1048576,
+  q:[{k:"fp8",n:"FP8+FP4专家 官方 510.3GB",gb:510.30},{k:"nvfp4",n:"NVFP4 NVIDIA 429.0GB",gb:428.99},{k:"q2",n:"GGUF Q2 antirez 365.7GB",gb:365.71}]},
  {id:"custom",name:"自定义（在高级口径里填）"}
 ];
 var QGEN=[{k:"bf16",n:"BF16",b:2},{k:"fp8",n:"FP8",b:1},{k:"int4",n:"INT4（AWQ/GPTQ）",b:0.56}];
@@ -256,8 +256,9 @@ function build(){
   SKEYS.concat(CMK,CHK).forEach(function(k){var el=$(k.indexOf("_")>0?k:"s_"+k);if(el)el.value=S[k];});
 }
 function qopts(){var m=modelOf(S.model),e=quantOf(m,S.quant);$("s_quant").innerHTML=m.q.map(function(x){return '<option value="'+x.k+'"'+(x===e?" selected":"")+'>'+x.n+'</option>';}).join("");}
-/* 按类别取量化版本；该模型没有这一类时退到 FP8（官方版） */
-function quantOf(m,k){var a=m.q,i;for(i=0;i<a.length;i++)if(a[i].k===k)return a[i];if(k==="gguf4")for(i=0;i<a.length;i++)if(a[i].k==="int4")return a[i];for(i=0;i<a.length;i++)if(a[i].k==="fp8")return a[i];return a[0];}
+/* 按类别取量化版本；没有这一类时先找相近的 4bit 类，再退到 FP8（官方版） */
+var QFB={nvfp4:["int4","gguf4"],int4:["nvfp4","gguf4"],gguf4:["int4","nvfp4"],q2:["gguf4","nvfp4","int4"]};
+function quantOf(m,k){var a=m.q,c=[k].concat(QFB[k]||[],["fp8"]),i,j;for(j=0;j<c.length;j++)for(i=0;i<a.length;i++)if(a[i].k===c[j])return a[i];return a[0];}
 function num(id,d){var el=$(id);var v=el?parseFloat(el.value):NaN;return isFinite(v)?v:d;}
 function find(list,id){for(var i=0;i<list.length;i++)if(list[i].id===id)return list[i];return list[0];}
 function lnq(m,cv,z){if(m<=0)return 0;var s=Math.sqrt(Math.log(1+cv*cv));return m*Math.exp(s*z-s*s/2);}
@@ -279,7 +280,7 @@ function readS(){
 }
 function modelOf(id){var m=find(MODELS,id);if(m.id!=="custom")return m;
   var t=Math.max(S.cm_tot,0.1),a=Math.min(S.cm_act,t);
-  return {id:"custom",name:"自定义模型",tot:t,act:a,den:0,exp:t,r:a/t,kv:S.cm_kv,attn:S.cm_attn,ctx:S.cm_ctx,
+  return {id:"custom",name:"自定义模型",tot:t,act:a,den:0,exp:t,r:a/t,kv:S.cm_kv,attn:S.cm_attn,ctxT:S.cm_ctx*1024,
     q:QGEN.map(function(x){return {k:x.k,n:x.n,gb:t*x.b};})};}
 function hwOf(id){var h=find(HW,id);if(h.id!=="custom")return h;return {id:"custom",name:"自定义硬件",short:"自定义卡",mem:S.ch_mem,bw:S.ch_bw,tf:S.ch_tf};}
 /* 需求规格：与硬件、模型都无关 */
@@ -351,12 +352,12 @@ function calc(){
     lines.map(function(l,i){return '<div class="need"><div class="v">'+l[0]+'</div><div class="n'+(i===z.bind?" bind":"")+'">'+l[2]+' 张</div><div class="d">'+l[1]+'</div></div>';}).join("");
   /* 结论提示 */
   var F=[];
-  if(m.native&&o.ctxCap>m.native*1024&&o.ctxCap<=m.ctx*1024)F.push("上下文上限 "+fT(o.ctxCap)+" 超过 "+m.name+" 的原生 "+m.native+"K，需要开 YaRN 扩展（vLLM 用 rope_scaling 参数）。");
-  if(o.ctxCap>m.ctx*1024)F.push("上下文上限 "+fT(o.ctxCap)+" 超过 "+m.name+" 支持的 "+m.ctx+"K。核对是否真需要这么长；不需要就在高级口径里调低 CV。");
+  if(m.nat&&o.ctxCap>m.nat&&o.ctxCap<=m.ctxT)F.push("上下文上限 "+fT(o.ctxCap)+" 超过 "+m.name+" 的原生 "+fn(m.nat)+" token，要按模型卡开启长上下文扩展（最多 "+fn(m.ctxT)+"）。");
+  if(o.ctxCap>m.ctxT)F.push("上下文上限 "+fT(o.ctxCap)+" 超过 "+m.name+" 支持的 "+fn(m.ctxT)+" token。核对是否真需要这么长；不需要就在高级口径里调低 CV。");
   if(z.bind===1&&z.kvShareBw>0.5)F.push("带宽需求里 KV 读取占 "+Math.round(z.kvShareBw*100)+"%：长上下文请求同时在跑。KV 改 FP8、限制 agent 并发或降低单流目标，比换更大的模型或卡更有效。");
   if(z.bind===2)F.push("瓶颈在 prefill 算力：缓存命中率对结果影响最大，先确认网关和引擎开了前缀缓存，并按实际命中率修改高级口径。");
   if(qe.k==="gguf4"||qe.k==="q2")F.push("GGUF 版本主要给 llama.cpp 用，多人并发时吞吐明显低于 vLLM/SGLang；多用户服务优先选 FP8 或 AWQ/NVFP4。");
-  if(qe.k==="int4"&&/NVFP4/.test(qe.n)&&!hw.fp4)F.push("NVFP4 需要 Blackwell（5090、RTX PRO 6000、B200）原生 FP4；"+hw.short+" 上没有这个加速，建议改选 FP8 或 AWQ。");
+  if(qe.k==="nvfp4"&&!hw.fp4)F.push("NVFP4 需要 Blackwell（5090、RTX PRO 6000、B200）原生 FP4；"+hw.short+" 上没有这个加速，建议改选 FP8 或 AWQ。");
   if(qe.k==="fp8"&&hw.nofp8)F.push(hw.short+" 没有原生 FP8 计算，FP8 权重通常要换成 W8A8（INT8）或 BF16 版本，显存按对应版本重算。");
   if(m.id==="ds-v41-flash")F.push("DeepSeek-V4.1-Flash 的 Engram（196B 参数，按 token 查表）在 vLLM 里可以卸载到主机内存，显存还能再省；本工具按全部放显存计算。");
   if(o.busyAll>0&&o.agentBusy/o.busyAll>0.4)F.push("编码 Agent 占 "+Math.round(100*o.agentBusy/o.busyAll)+"% 的槽位：建议网关按 key 限并发。");
