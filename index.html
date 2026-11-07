@@ -100,7 +100,7 @@ input:focus-visible,button:focus-visible,summary:focus-visible,select:focus-visi
   <div class="card">
     <div class="fields">
       <label for="s_model" class="wide">模型<select id="s_model"></select></label>
-      <label for="s_quant">权重精度<select id="s_quant"></select></label>
+      <label for="s_quant">量化版本<select id="s_quant"></select></label>
       <label for="s_hw">候选硬件<select id="s_hw"></select></label>
       <label for="s_v">单流速度 tok/s<input id="s_v" inputmode="decimal"></label>
       <label for="s_ttft">首 token 目标 秒<input id="s_ttft" inputmode="decimal"></label>
@@ -114,7 +114,7 @@ input:focus-visible,button:focus-visible,summary:focus-visible,select:focus-visi
   <details>
     <summary>换模型对比（当前硬件）›</summary>
     <div class="scroll"><table><thead><tr><th>模型</th><th>显存</th><th>带宽</th><th>算力</th><th>最少</th></tr></thead><tbody id="cmp"></tbody></table></div>
-    <div class="inner-note">显存 GB、带宽 TB/s、算力 TFLOPS，均按当前权重精度和 KV 精度计算。</div>
+    <div class="inner-note">显存 GB、带宽 TB/s、算力 TFLOPS。每个模型取与当前同一类的量化版本（没有这一类时取官方 FP8），KV 精度相同。</div>
   </details>
 
   <h2>需求规格（与硬件无关）</h2>
@@ -135,7 +135,7 @@ input:focus-visible,button:focus-visible,summary:focus-visible,select:focus-visi
       <div class="fields">
         <label for="cm_tot">总参数 B<input id="cm_tot" inputmode="decimal"></label>
         <label for="cm_act">激活参数 B<input id="cm_act" inputmode="decimal"></label>
-        <label for="cm_kv">KV KB/token（BF16）<input id="cm_kv" inputmode="decimal"></label>
+        <label for="cm_kv">KV KB/token（BF16，只算全注意力层）<input id="cm_kv" inputmode="decimal"></label>
         <label for="cm_attn">注意力系数 M<input id="cm_attn" inputmode="decimal"></label>
         <label for="cm_ctx">原生窗口 K<input id="cm_ctx" inputmode="decimal"></label>
       </div>
@@ -166,13 +166,13 @@ input:focus-visible,button:focus-visible,summary:focus-visible,select:focus-visi
   <button class="reset" id="reset" type="button">恢复默认</button>
 
   <div class="note"><b>怎么读结论。</b>这是粗估，用来排除明显不够的方案、确定量级；定方案前用 capplan 的 <code>tune</code> 和 <code>bench</code> 按实测曲线细算。最少卡数取显存、带宽、算力三项里最大的一项（标蓝的就是瓶颈），并按张量并行向上取 1、2、4、8 张。</div>
-  <div class="note"><b>换算口径。</b>显存 =（权重 + KV 推荐池）÷ 0.9。带宽 = 单流速度 × 每步读取字节 ÷ 0.6，每步读取 = 被激活的权重 + 在跑请求的 KV（最低池）；MoE 在并发时各条流激活的专家不同，按 1 −（1 − 激活比）<sup>槽位</sup> 估算被读到的权重比例。算力 = 冷 prefill 吞吐 ×（2 × 激活参数 + 注意力开销）÷ 0.4。多卡时每加一张按 85% 效率计。</div>
+  <div class="note"><b>换算口径。</b>显存 =（量化文件大小 + KV 推荐池 + 每流固定状态）÷ 0.9。KV 只算全注意力层，线性注意力层每条流是固定大小的状态。带宽 = 单流速度 × 每步读取字节 ÷ 0.6，每步读取 = 被读到的权重 + 在跑请求的 KV（最低池，稀疏注意力按每流最多看的 token 数封顶）+ 线性状态；MoE 在并发时各条流选的专家不同，按 1 −（1 − 选中专家比例）<sup>槽位</sup> 估算被读到的专家比例。算力 = 冷 prefill 吞吐 ×（2 × 激活参数 + 注意力开销）÷ 0.4。多卡时每加一张按 85% 效率计。</div>
   <div class="note"><b>画像依据。</b>OpenRouter《State of AI》平均 prompt 6K+、输出约 400；编码 Agent 取 TraceLab（中位 119K 缓存前缀 / 875 新增 / 214 输出）与 GitHub Copilot 轨迹（中位 68K / 247）。每人每小时次数、在线率、RAG 与长文档画像为经验假设，有网关日志时优先校准。每次占槽时长 = 首 token 目标 + 输出 ÷ 单流速度。</div>
   <div class="note" id="ver"></div>
 </main>
 <script>
 (function(){
-var VER="v2.2 · 2026-11-07";
+var VER="v2.3 · 2026-11-07";
 var DEF=[
  {id:"light",name:"轻度问答",note:"翻译、查询、短对话",users:10,pres:0.7,rph:6,ctx:1500,nw:500,out:400},
  {id:"doc",name:"文档/知识问答",note:"贴文档、改写、分析",users:30,pres:0.8,rph:12,ctx:6000,nw:1500,out:500},
@@ -182,29 +182,40 @@ var DEF=[
  {id:"long",name:"长文档分析",note:"合同、报告整本读",users:0,pres:0.5,rph:3,ctx:60000,nw:50000,out:1500}
 ];
 var PF=[["pres","在线率"],["rph","次/人·时"],["ctx","上下文"],["nw","新增"],["out","输出"]];
-/* 模型预设：tot/act 十亿参数；kv = BF16 下 KB/token；attn = 2·L·H·(dqk+dv)/1e6；ctx = 支持窗口 K token */
+/* 模型预设（2026-11 按 Hugging Face 官方 config.json、模型卡、文件大小核对）
+   tot 文件里的参数（十亿，含 n-gram/Engram 查表参数和 MTP）；act 每 token 激活（actP = prefill 时激活，缺省同 act）
+   den 每步必读的非路由参数；exp 路由专家参数；r = 每 token 选中专家数 ÷ 专家总数（稠密：exp=0）
+   kv  全注意力层 KV，BF16 下 KB/token（线性注意力层不随长度增长）；kvFix 官方固定格式，不随 KV 精度变
+   idx 稀疏注意力索引器 key 缓存 KB/token；st 每条序列的固定状态 MB（线性注意力状态 / 滑窗 KV）
+   attn 全注意力层每"被看到的 token"的计算量 M FLOPs；cap 稀疏注意力每个 query 最多看的 token 数
+   q 量化版本：k 类别，gb = HF 上实际文件大小 */
 var MODELS=[
- {id:"qwen3-8b",name:"Qwen3-8B（稠密）",tot:8.2,act:8.2,kv:144,attn:0.59,ctx:128,native:32},
- {id:"qwen3-32b",name:"Qwen3-32B（稠密）",tot:32.8,act:32.8,kv:256,attn:2.10,ctx:128,native:32},
- {id:"llama33-70b",name:"Llama-3.3-70B（稠密）",tot:70.6,act:70.6,kv:320,attn:2.62,ctx:128},
- {id:"qwen3-30b-a3b",name:"Qwen3-30B-A3B（MoE）",tot:30.5,act:3.3,kv:96,attn:0.79,ctx:128,native:32},
- {id:"qwen3-235b-a22b",name:"Qwen3-235B-A22B（MoE）",tot:235,act:22,kv:188,attn:3.08,ctx:128,native:32},
- {id:"deepseek-v3",name:"DeepSeek-V3/R1 671B（MoE·MLA）",tot:671,act:37,kv:68.6,attn:5.00,ctx:128},
+ {id:"qwen38-27b",name:"Qwen3.8-27B（稠密·线性混合）",tot:27.8,act:27.8,den:27.8,exp:0,r:1,kv:64,st:78,attn:0.39,ctx:256,
+  q:[{k:"bf16",n:"BF16 原版 55.6GB",gb:55.56},{k:"fp8",n:"FP8 官方 30.9GB",gb:30.86},{k:"int4",n:"AWQ INT4 社区 21.0GB",gb:21.02},{k:"gguf4",n:"GGUF Q4_K_M 16.5GB",gb:16.46}]},
+ {id:"qwen38-flash-next",name:"Qwen3.8-Flash-Next A6B（MoE·稀疏+线性）",tot:180,act:6,den:4.2,exp:120.8,r:10/512,kv:24,idx:0.75,st:59,attn:0.29,cap:2048,ctx:256,
+  q:[{k:"bf16",n:"BF16 原版 360GB",gb:360.00},{k:"fp8",n:"FP8 官方 185GB",gb:185.49},{k:"int4",n:"NVFP4 NVIDIA 133GB",gb:132.68},{k:"gguf4",n:"GGUF UD-Q4_K_XL 111GB",gb:111.33}]},
+ {id:"qwen36-35b-a3b",name:"Qwen3.6-35B-A3B（MoE·线性混合）",tot:36,act:3,den:3.7,exp:32.2,r:8/256,kv:20,st:33,attn:0.16,ctx:256,
+  q:[{k:"bf16",n:"BF16 原版 71.9GB",gb:71.90},{k:"fp8",n:"FP8 官方 37.5GB",gb:37.46},{k:"int4",n:"AWQ 4bit 社区 25.0GB",gb:24.97},{k:"gguf4",n:"GGUF UD-Q4_K_M 22.1GB",gb:22.13}]},
+ {id:"glm53-flash",name:"GLM-5.3-Flash 320B-A18B（MoE·稀疏+线性）",tot:321.3,act:18,den:9.6,exp:304.4,r:8/288,kv:11,idx:0.69,st:76,attn:0.72,cap:2048,ctx:1024,
+  q:[{k:"bf16",n:"BF16 官方 643GB",gb:642.65},{k:"fp8",n:"FP8 官方 328GB",gb:328.33},{k:"gguf4",n:"GGUF UD-Q4_K_XL 200GB",gb:199.71}]},
+ {id:"ds-v41-flash",name:"DeepSeek-V4.1-Flash（MoE·CSA2）",tot:763,act:16,actP:8,den:8.4,exp:543.6,r:6/384,kv:0.87,kvFix:true,st:5,attn:5.24,cap:640,ctx:1024,
+  q:[{k:"fp8",n:"FP8+FP4专家 官方 510GB",gb:510.3},{k:"int4",n:"NVFP4 NVIDIA 429GB",gb:429.0},{k:"q2",n:"GGUF Q2 社区 366GB",gb:365.7}]},
  {id:"custom",name:"自定义（在高级口径里填）"}
 ];
-var QUANT=[{id:"bf16",name:"BF16",b:2},{id:"fp8",name:"FP8",b:1},{id:"int4",name:"INT4（AWQ/GPTQ）",b:0.56}];
-/* 硬件预设（单卡）：mem GB，bw GB/s，tf = BF16 稠密 TFLOPS */
+var QGEN=[{k:"bf16",n:"BF16",b:2},{k:"fp8",n:"FP8",b:1},{k:"int4",n:"INT4（AWQ/GPTQ）",b:0.56}];
+/* 硬件预设（单卡）：mem GB，bw GB/s，tf = BF16 稠密 TFLOPS；fp4 = 原生 FP4（Blackwell） */
 var HW=[
  {id:"4090",name:"RTX 4090 24GB",short:"4090",mem:24,bw:1008,tf:165},
- {id:"5090",name:"RTX 5090 32GB",short:"5090",mem:32,bw:1792,tf:209},
- {id:"pro6000",name:"RTX PRO 6000 96GB（服务器版）",short:"PRO6000",mem:96,bw:1597,tf:500},
- {id:"h20",name:"H20 96GB",short:"H20",mem:96,bw:4000,tf:148},
- {id:"910b",name:"昇腾 910B 64GB（规格取常见值）",short:"910B",mem:64,bw:1600,tf:320},
+ {id:"5090",name:"RTX 5090 32GB",short:"5090",mem:32,bw:1792,tf:209,fp4:1},
+ {id:"pro6000",name:"RTX PRO 6000 96GB 服务器版",short:"PRO6000",mem:96,bw:1597,tf:500,fp4:1},
+ {id:"pro6000ws",name:"RTX PRO 6000 96GB 工作站版",short:"PRO6000",mem:96,bw:1792,tf:500,fp4:1},
+ {id:"h20",name:"H20 96GB（非官方常见值）",short:"H20",mem:96,bw:4000,tf:148},
+ {id:"910b",name:"昇腾 910B 64GB（非官方常见值）",short:"910B",mem:64,bw:1600,tf:320,nofp8:1},
  {id:"h100",name:"H100 SXM 80GB",short:"H100",mem:80,bw:3350,tf:989},
  {id:"h200",name:"H200 SXM 141GB",short:"H200",mem:141,bw:4800,tf:989},
  {id:"custom",name:"自定义（在高级口径里填）"}
 ];
-var SDEF={model:"qwen3-32b",quant:"fp8",hw:"pro6000",v:30,ttft:3,kvq:"2",q:0.99,hit:0.9,pf:0.3,cv:0.9,h:8,
+var SDEF={model:"qwen38-27b",quant:"fp8",hw:"pro6000",v:30,ttft:3,kvq:"2",q:0.99,hit:0.9,pf:0.3,cv:0.9,h:8,
   cm_tot:32,cm_act:32,cm_kv:256,cm_attn:2.1,cm_ctx:128,ch_mem:96,ch_bw:1792,ch_tf:250};
 var SKEYS=["v","ttft","q","hit","pf","cv","h"],CMK=["cm_tot","cm_act","cm_kv","cm_attn","cm_ctx"],CHK=["ch_mem","ch_bw","ch_tf"];
 var LS="llm_sizer_v2";
@@ -241,9 +252,12 @@ function build(){
       var cur=parseFloat(el.value)||0,step=cur>=20?5:1;el.value=Math.max(0,cur+step*(+b.getAttribute("data-d")));calc();});
   });
   Array.prototype.forEach.call(document.querySelectorAll("#profs input,#pfields input"),function(el){el.addEventListener("input",calc);});
-  opts($("s_model"),MODELS,S.model);opts($("s_quant"),QUANT,S.quant);opts($("s_hw"),HW,S.hw);$("s_kvq").value=S.kvq;
+  if(!MODELS.some(function(m){return m.id===S.model;}))S.model=SDEF.model;opts($("s_model"),MODELS,S.model);qopts();opts($("s_hw"),HW,S.hw);$("s_kvq").value=S.kvq;
   SKEYS.concat(CMK,CHK).forEach(function(k){var el=$(k.indexOf("_")>0?k:"s_"+k);if(el)el.value=S[k];});
 }
+function qopts(){var m=modelOf(S.model),e=quantOf(m,S.quant);$("s_quant").innerHTML=m.q.map(function(x){return '<option value="'+x.k+'"'+(x===e?" selected":"")+'>'+x.n+'</option>';}).join("");}
+/* 按类别取量化版本；该模型没有这一类时退到 FP8（官方版） */
+function quantOf(m,k){var a=m.q,i;for(i=0;i<a.length;i++)if(a[i].k===k)return a[i];if(k==="gguf4")for(i=0;i<a.length;i++)if(a[i].k==="int4")return a[i];for(i=0;i<a.length;i++)if(a[i].k==="fp8")return a[i];return a[0];}
 function num(id,d){var el=$(id);var v=el?parseFloat(el.value):NaN;return isFinite(v)?v:d;}
 function find(list,id){for(var i=0;i<list.length;i++)if(list[i].id===id)return list[i];return list[0];}
 function lnq(m,cv,z){if(m<=0)return 0;var s=Math.sqrt(Math.log(1+cv*cv));return m*Math.exp(s*z-s*s/2);}
@@ -258,13 +272,15 @@ function fT(x){if(x>=1e9)return(x/1e9).toFixed(2)+"B";if(x>=1e6)return(x/1e6).to
 function fn(x){return Math.round(x).toLocaleString("zh-CN");}
 function f1(x){return x>=100?fn(x):x>=10?x.toFixed(0):x.toFixed(1);}
 function readS(){
-  S.model=$("s_model").value;S.quant=$("s_quant").value;S.hw=$("s_hw").value;S.kvq=$("s_kvq").value;
+  var pm=S.model;S.model=$("s_model").value;S.quant=$("s_quant").value;if(pm!==S.model)qopts();S.hw=$("s_hw").value;S.kvq=$("s_kvq").value;
   SKEYS.forEach(function(k){S[k]=num("s_"+k,SDEF[k]);});
   CMK.concat(CHK).forEach(function(k){S[k]=num(k,SDEF[k]);});
   $("cm_box").hidden=S.model!=="custom";$("ch_box").hidden=S.hw!=="custom";
 }
 function modelOf(id){var m=find(MODELS,id);if(m.id!=="custom")return m;
-  return {id:"custom",name:"自定义模型",tot:S.cm_tot,act:Math.min(S.cm_act,S.cm_tot),kv:S.cm_kv,attn:S.cm_attn,ctx:S.cm_ctx};}
+  var t=Math.max(S.cm_tot,0.1),a=Math.min(S.cm_act,t);
+  return {id:"custom",name:"自定义模型",tot:t,act:a,den:0,exp:t,r:a/t,kv:S.cm_kv,attn:S.cm_attn,ctx:S.cm_ctx,
+    q:QGEN.map(function(x){return {k:x.k,n:x.n,gb:t*x.b};})};}
 function hwOf(id){var h=find(HW,id);if(h.id!=="custom")return h;return {id:"custom",name:"自定义硬件",short:"自定义卡",mem:S.ch_mem,bw:S.ch_bw,tf:S.ch_tf};}
 /* 需求规格：与硬件、模型都无关 */
 function spec(){
@@ -292,38 +308,43 @@ var EFF_BW=0.6,EFF_TF=0.4,MEM_UTIL=0.9,TP_EFF=0.85;
 function cardsFor(need,per){if(need<=0)return 1;if(need<=per)return 1;return Math.ceil(need/(per*TP_EFF));}
 function pow2(n){var p=1;while(p<n)p*=2;return p;}
 /* 选型：给定模型 + 精度 + 硬件，换算成显存/带宽/算力需求和最少卡数 */
-function sizing(o,m,qb,kvb,hw){
-  var GB=1e9,kvB=m.kv*1024*kvb/2;
-  var wGB=m.tot*qb;
-  var kvRecGB=o.kvRec*kvB/GB,kvMinGB=o.kvMin*kvB/GB;
-  var mem=(wGB+kvRecGB)/MEM_UTIL;
-  var r=m.act/m.tot,touched=r>=0.999?1:Math.max(r,1-Math.pow(1-r,o.slots));
-  var wStepGB=m.tot*qb*touched;
-  var bw=o.v*(wStepGB+kvMinGB)/EFF_BW;
-  var flopsTok=2*m.act*1e9+m.attn*1e6*o.attnAvg;
+function sizing(o,m,qe,kvb,hw){
+  var GB=1e9,kvMain=(m.kvFix?m.kv:m.kv*kvb/2)*1024,kvIdx=(m.idx||0)*1024,kvB=kvMain+kvIdx;
+  var wGB=qe.gb,bpp=wGB/m.tot;
+  var kvRecGB=o.kvRec*kvB/GB,kvMinGB=o.kvMin*kvB/GB,stGB=(m.st||0)*1e6*o.slots/GB;
+  var mem=(wGB+kvRecGB+stGB)/MEM_UTIL;
+  /* 每步读到的权重：非路由部分全读；并发时各流选的专家不同，被读到的专家比例 = 1 −（1 − r）^槽位 */
+  var touchE=m.exp>0?1-Math.pow(1-m.r,o.slots):0;
+  var wStepGB=bpp*(m.den+m.exp*touchE);
+  /* 每步读到的 KV：稀疏注意力每条流最多读 cap 个 token 的主 KV；索引器 key 全读；线性状态读写各一次 */
+  var perSeq=o.kvMin/Math.max(o.slots,1),frac=m.cap?Math.min(1,m.cap/Math.max(perSeq,1)):1;
+  var kvReadGB=o.kvMin*(kvMain*frac+kvIdx)/GB+2*stGB;
+  var bw=o.v*(wStepGB+kvReadGB)/EFF_BW;
+  var att=m.cap?Math.min(o.attnAvg,m.cap):o.attnAvg;
+  var flopsTok=2*(m.actP||m.act)*1e9+m.attn*1e6*att;
   var tf=o.pfReq*flopsTok/EFF_TF/1e12;
   var n=[cardsFor(mem,hw.mem),cardsFor(bw,hw.bw),cardsFor(tf,hw.tf)];
   var raw=Math.max(n[0],n[1],n[2]),bind=n.indexOf(raw);
-  return {wGB:wGB,kvRecGB:kvRecGB,kvMinGB:kvMinGB,mem:mem,bw:bw,tf:tf,n:n,raw:raw,cards:pow2(raw),bind:bind,
-    kvShareBw:(kvMinGB)/(wStepGB+kvMinGB),touched:touched,attnShare:(m.attn*1e6*o.attnAvg)/flopsTok};
+  return {wGB:wGB,kvRecGB:kvRecGB,kvMinGB:kvMinGB,stGB:stGB,mem:mem,bw:bw,tf:tf,n:n,raw:raw,cards:pow2(raw),bind:bind,
+    kvShareBw:kvReadGB/(wStepGB+kvReadGB),touchE:touchE,attnShare:(m.attn*1e6*att)/flopsTok};
 }
 function calc(){
   rows.forEach(function(r){r.users=Math.max(0,num("u_"+r.id,0));PF.forEach(function(f){r[f[0]]=num(r.id+"_"+f[0],r[f[0]]);});});
   readS();save();
-  var o=spec(),m=modelOf(S.model),hw=hwOf(S.hw),qb=find(QUANT,S.quant).b,kvb=+S.kvq;
-  var z=sizing(o,m,qb,kvb,hw);
+  var o=spec(),m=modelOf(S.model),hw=hwOf(S.hw),qe=quantOf(m,S.quant),kvb=+S.kvq;
+  var z=sizing(o,m,qe,kvb,hw);
   var BN=["显存","带宽","算力"];
   $("t_slots").textContent=o.slots;
   $("t_mem").textContent=fn(z.mem)+" GB";
   $("t_cards").textContent=z.cards>8?">8 卡":z.cards+"×"+hw.short;
   var over=z.cards>8;
   var big=over?"单机 8 张 "+hw.short+" 不够":"最少 "+z.cards+" × "+hw.name;
-  var sub=m.name+" · "+find(QUANT,S.quant).name+" 权重 · "+(kvb===1?"FP8":"BF16")+" KV；瓶颈在"+BN[z.bind]+
+  var sub=m.name+" · "+qe.n+" · "+(m.kvFix?"官方 FP4":kvb===1?"FP8":"BF16")+" KV；瓶颈在"+BN[z.bind]+
     (z.raw!==z.cards?"（按 "+z.raw+" 张算，张量并行取 "+z.cards+" 张）":"")+
     (over?"。可以换更小或 MoE 模型、降低权重精度、降低单流目标，或按多机部署。":"。");
   var lines=[
-    ["显存 ≥ "+fn(z.mem)+" GB","权重 "+fn(z.wGB)+" + KV 推荐 "+fn(z.kvRecGB)+" GB，再除以 0.9 留出运行开销；单卡 "+hw.mem+" GB",z.n[0]],
-    ["带宽 ≥ "+(z.bw/1000).toFixed(z.bw>=10000?0:1)+" TB/s","每步读权重"+(z.touched<1?"（并发下约 "+Math.round(z.touched*100)+"% 的专家被激活）":"")+" + 在跑 KV，KV 占 "+Math.round(z.kvShareBw*100)+"%；单卡 "+fn(hw.bw)+" GB/s",z.n[1]],
+    ["显存 ≥ "+fn(z.mem)+" GB","权重 "+fn(z.wGB)+" + KV 推荐 "+fn(z.kvRecGB)+(z.stGB>0.5?" + 线性/滑窗状态 "+fn(z.stGB):"")+" GB，再除以 0.9 留出运行开销；单卡 "+hw.mem+" GB",z.n[0]],
+    ["带宽 ≥ "+(z.bw/1000).toFixed(z.bw>=10000?0:1)+" TB/s","每步读权重"+(m.exp>0&&z.touchE<1?"（并发下约 "+Math.round(z.touchE*100)+"% 的专家被读到）":"")+" + 在跑 KV"+(m.cap?"（稀疏注意力每流最多读 "+m.cap+" token）":"")+"，KV 占 "+Math.round(z.kvShareBw*100)+"%；单卡 "+fn(hw.bw)+" GB/s",z.n[1]],
     ["算力 ≥ "+fn(z.tf)+" TFLOPS","冷 prefill "+fn(o.pfReq)+" tok/s，注意力占 "+Math.round(z.attnShare*100)+"%；单卡 "+hw.tf+" TFLOPS（BF16 稠密）",z.n[2]]
   ];
   $("verdict").innerHTML='<div class="verdict'+(over?" bad":"")+'"><div class="big">'+big+'</div><div class="sub">'+sub+'</div></div>'+
@@ -334,12 +355,16 @@ function calc(){
   if(o.ctxCap>m.ctx*1024)F.push("上下文上限 "+fT(o.ctxCap)+" 超过 "+m.name+" 支持的 "+m.ctx+"K。核对是否真需要这么长；不需要就在高级口径里调低 CV。");
   if(z.bind===1&&z.kvShareBw>0.5)F.push("带宽需求里 KV 读取占 "+Math.round(z.kvShareBw*100)+"%：长上下文请求同时在跑。KV 改 FP8、限制 agent 并发或降低单流目标，比换更大的模型或卡更有效。");
   if(z.bind===2)F.push("瓶颈在 prefill 算力：缓存命中率对结果影响最大，先确认网关和引擎开了前缀缓存，并按实际命中率修改高级口径。");
+  if(qe.k==="gguf4"||qe.k==="q2")F.push("GGUF 版本主要给 llama.cpp 用，多人并发时吞吐明显低于 vLLM/SGLang；多用户服务优先选 FP8 或 AWQ/NVFP4。");
+  if(qe.k==="int4"&&/NVFP4/.test(qe.n)&&!hw.fp4)F.push("NVFP4 需要 Blackwell（5090、RTX PRO 6000、B200）原生 FP4；"+hw.short+" 上没有这个加速，建议改选 FP8 或 AWQ。");
+  if(qe.k==="fp8"&&hw.nofp8)F.push(hw.short+" 没有原生 FP8 计算，FP8 权重通常要换成 W8A8（INT8）或 BF16 版本，显存按对应版本重算。");
+  if(m.id==="ds-v41-flash")F.push("DeepSeek-V4.1-Flash 的 Engram（196B 参数，按 token 查表）在 vLLM 里可以卸载到主机内存，显存还能再省；本工具按全部放显存计算。");
   if(o.busyAll>0&&o.agentBusy/o.busyAll>0.4)F.push("编码 Agent 占 "+Math.round(100*o.agentBusy/o.busyAll)+"% 的槽位：建议网关按 key 限并发。");
   $("flags").innerHTML=F.length?F.map(function(t){return '<div class="flag">'+t+'</div>';}).join(""):'<div class="flag ok">各项需求之间没有明显失衡。</div>';
   /* 换模型对比 */
   $("cmp").innerHTML=MODELS.filter(function(x){return x.id!=="custom"||S.model==="custom";}).map(function(x){
-    var mm=modelOf(x.id),zz=sizing(o,mm,qb,kvb,hw);
-    return '<tr'+(x.id===S.model?' class="sel"':'')+'><td>'+mm.name+'</td><td>'+fn(zz.mem)+'</td><td>'+(zz.bw/1000).toFixed(1)+'</td><td>'+fn(zz.tf)+'</td><td>'+(zz.cards>8?">8":zz.cards)+'</td></tr>';
+    var mm=modelOf(x.id),qq=quantOf(mm,S.quant),zz=sizing(o,mm,qq,kvb,hw);
+    return '<tr'+(x.id===S.model?' class="sel"':'')+'><td>'+mm.name+'<br><small>'+qq.n+'</small></td><td>'+fn(zz.mem)+'</td><td>'+(zz.bw/1000).toFixed(1)+'</td><td>'+fn(zz.tf)+'</td><td>'+(zz.cards>8?">8":zz.cards)+'</td></tr>';
   }).join("");
   /* 需求规格 */
   var items=[
@@ -361,7 +386,7 @@ Array.prototype.forEach.call(document.querySelectorAll("main > .card .fields inp
 $("reset").addEventListener("click",function(){try{localStorage.removeItem(LS);}catch(e){}rows=clone(DEF);S=clone(SDEF);build();calc();});
 $("ver").textContent=VER;
 calc();
-window.__llmSizer={spec:spec,sizing:sizing,MODELS:MODELS,HW:HW,QUANT:QUANT,modelOf:modelOf,hwOf:hwOf,S:function(){return S;},calc:calc};
+window.__llmSizer={spec:spec,sizing:sizing,MODELS:MODELS,HW:HW,quantOf:quantOf,modelOf:modelOf,hwOf:hwOf,S:function(){return S;},calc:calc};
 })();
 if("serviceWorker" in navigator&&location.protocol!=="file:"){navigator.serviceWorker.register("sw.js").catch(function(){});}
 </script>

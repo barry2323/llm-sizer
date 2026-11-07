@@ -1,7 +1,7 @@
 // 先返回缓存（离线可用），同时后台联网更新缓存；下次打开即为新版本。
 // waitUntil 在事件处理函数里同步调用（iOS Safari 对异步调用不宽容）。
 // 发布时改 C 的版本号可以强制清掉旧缓存。
-const C = "llm-sizer-v4";
+const C = "llm-sizer-v5";
 const F = ["./", "./index.html", "./manifest.webmanifest", "./icon-180.png", "./icon-512.png"];
 
 self.addEventListener("install", e => {
