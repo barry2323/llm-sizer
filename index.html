@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="推理估算">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="theme-color" content="#0a62c9">
+<title>LLM 推理估算</title>
+<style>
+:root{
+  --paper:#f2f2f7; --surface:#ffffff; --ink:#1c1c1e; --muted:#6c6c70; --line:#d8d8dd; --accent:#0a62c9; --warn:#a35a00; --ok:#1d7a4c; --bad:#b3261e;
+  --body:-apple-system,"SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--paper:#000000;--surface:#1c1c1e;--ink:#f2f2f7;--muted:#98989f;--line:#38383a;--accent:#4aa3ff;--warn:#ffb347;--ok:#5cd38f;--bad:#ff6b5e;color-scheme:dark;}}
+:root[data-theme="dark"]{--paper:#000000;--surface:#1c1c1e;--ink:#f2f2f7;--muted:#98989f;--line:#38383a;--accent:#4aa3ff;--warn:#ffb347;--ok:#5cd38f;--bad:#ff6b5e;color-scheme:dark;}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.45;-webkit-text-size-adjust:100%}
+.top{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--line);
+  padding:calc(env(safe-area-inset-top) + 10px) calc(env(safe-area-inset-right) + 16px) 10px calc(env(safe-area-inset-left) + 16px)}
+.top h1{font-size:17px;margin:0 0 8px;font-weight:600}
+.sum{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.sum div{background:var(--paper);border-radius:10px;padding:6px 8px;min-width:0}
+.sum .k{font-size:11px;color:var(--muted)}
+.sum .v{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+main{padding:14px calc(env(safe-area-inset-right) + 16px) calc(env(safe-area-inset-bottom) + 32px) calc(env(safe-area-inset-left) + 16px);display:grid;gap:14px;max-width:720px;margin:0 auto}
+h2{font-size:13px;color:var(--muted);font-weight:600;margin:6px 4px 0}
+.card{background:var(--surface);border-radius:12px;overflow:hidden}
+.prof{display:grid;grid-template-columns:1fr auto;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.prof:last-child{border-bottom:0}
+.prof b{display:block;font-size:16px;font-weight:600}
+.prof span{font-size:12.5px;color:var(--muted)}
+.step{display:flex;align-items:center;gap:6px}
+.step button{width:44px;height:44px;border-radius:22px;border:0;background:var(--paper);color:var(--accent);font-size:24px;font-weight:500;line-height:1}
+.step button:active{opacity:.6}
+.step input{width:58px;height:44px;text-align:center;font-family:var(--mono);font-size:18px;font-weight:600;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink)}
+details{background:var(--surface);border-radius:12px}
+summary{padding:14px;font-size:15px;font-weight:600;color:var(--accent);list-style:none;min-height:44px}
+summary::-webkit-details-marker{display:none}
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px 14px 14px}
+details .fields{padding-top:0}
+.fields label{display:grid;gap:4px;font-size:12.5px;color:var(--muted);min-width:0}
+.fields input,.fields select{height:40px;font-size:16px;font-family:var(--mono);border:1px solid var(--line);border-radius:8px;padding:0 10px;background:var(--paper);color:var(--ink);width:100%;min-width:0}
+.fields select{font-family:var(--body);-webkit-appearance:none;appearance:none}
+.fields .wide{grid-column:1 / -1}
+.pgroup{padding:0 14px 12px}
+.pgroup h3{font-size:14px;margin:10px 0 6px}
+.verdict{padding:14px;border-bottom:1px solid var(--line)}
+.verdict .big{font-size:20px;font-weight:700;line-height:1.3}
+.verdict .sub{font-size:13px;color:var(--muted);margin-top:4px}
+.verdict.bad .big{color:var(--bad)}
+.need{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:10px 14px;border-bottom:1px solid var(--line);align-items:baseline}
+.need:last-child{border-bottom:0}
+.need .k{font-size:13px;color:var(--muted)}
+.need .v{font-family:var(--mono);font-size:19px;font-weight:600}
+.need .n{font-family:var(--mono);font-size:14px;color:var(--muted);text-align:right}
+.need .n.bind{color:var(--accent);font-weight:700}
+.need .d{grid-column:1 / -1;font-size:12px;color:var(--muted)}
+.kpi{padding:12px 14px;border-bottom:1px solid var(--line);display:grid;gap:2px}
+.kpi:last-child{border-bottom:0}
+.kpi .k{font-size:13px;color:var(--muted)}
+.kpi .v{font-family:var(--mono);font-size:22px;font-weight:600}
+.kpi .d{font-size:12.5px;color:var(--muted)}
+.flag{padding:10px 14px;font-size:14px;border-left:4px solid var(--warn);background:var(--surface);border-radius:8px}
+.flag.ok{border-color:var(--ok)}
+table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th{color:var(--muted);font-weight:600;font-size:12px}
+th:first-child,td:first-child{text-align:left}
+tr.sel td{color:var(--accent);font-weight:600}
+.scroll{overflow-x:auto}
+.note{font-size:12.5px;color:var(--muted);padding:0 4px}
+.inner-note{font-size:12.5px;color:var(--muted);padding:0 14px 14px}
+.reset{width:100%;min-height:44px;border:0;border-radius:12px;background:var(--surface);color:var(--accent);font-size:16px}
+[hidden]{display:none!important}
+input:focus-visible,button:focus-visible,summary:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>LLM 推理估算</h1>
+  <div class="sum">
+    <div><div class="k">并发槽位</div><div class="v" id="t_slots">–</div></div>
+    <div><div class="k">需显存</div><div class="v" id="t_mem">–</div></div>
+    <div><div class="k">最少配置</div><div class="v" id="t_cards">–</div></div>
+  </div>
+</div>
+<main>
+  <h2>各类人数（预填为示例）</h2>
+  <div class="card" id="profs"></div>
+
+  <h2>模型、硬件与体验目标</h2>
+  <div class="card">
+    <div class="fields">
+      <label for="s_model" class="wide">模型<select id="s_model"></select></label>
+      <label for="s_quant">权重精度<select id="s_quant"></select></label>
+      <label for="s_hw">候选硬件<select id="s_hw"></select></label>
+      <label for="s_v">单流速度 tok/s<input id="s_v" inputmode="decimal"></label>
+      <label for="s_ttft">首 token 目标 秒<input id="s_ttft" inputmode="decimal"></label>
+    </div>
+  </div>
+
+  <h2>结论（粗估）</h2>
+  <div class="card" id="verdict"></div>
+  <div id="flags" style="display:grid;gap:8px"></div>
+
+  <details>
+    <summary>换模型对比（当前硬件）›</summary>
+    <div class="scroll"><table><thead><tr><th>模型</th><th>显存</th><th>带宽</th><th>算力</th><th>最少</th></tr></thead><tbody id="cmp"></tbody></table></div>
+    <div class="inner-note">显存 GB、带宽 TB/s、算力 TFLOPS，均按当前权重精度和 KV 精度计算。</div>
+  </details>
+
+  <h2>需求规格（与硬件无关）</h2>
+  <div class="card" id="kpis"></div>
+
+  <details>
+    <summary>高级口径 ›</summary>
+    <div class="fields">
+      <label for="s_kvq">KV 精度<select id="s_kvq"><option value="2">BF16</option><option value="1">FP8</option></select></label>
+      <label for="s_q">并发分位<input id="s_q" inputmode="decimal"></label>
+      <label for="s_hit">缓存命中率<input id="s_hit" inputmode="decimal"></label>
+      <label for="s_pf">prefill 占用上限<input id="s_pf" inputmode="decimal"></label>
+      <label for="s_cv">长度离散度 CV<input id="s_cv" inputmode="decimal"></label>
+      <label for="s_h">每天工作小时<input id="s_h" inputmode="decimal"></label>
+    </div>
+    <div id="cm_box" hidden>
+      <div class="pgroup"><h3>自定义模型</h3></div>
+      <div class="fields">
+        <label for="cm_tot">总参数 B<input id="cm_tot" inputmode="decimal"></label>
+        <label for="cm_act">激活参数 B<input id="cm_act" inputmode="decimal"></label>
+        <label for="cm_kv">KV KB/token（BF16）<input id="cm_kv" inputmode="decimal"></label>
+        <label for="cm_attn">注意力系数 M<input id="cm_attn" inputmode="decimal"></label>
+        <label for="cm_ctx">原生窗口 K<input id="cm_ctx" inputmode="decimal"></label>
+      </div>
+      <div class="inner-note">注意力系数 = 2 × 层数 × 注意力头数 ×（QK 头维 + V 头维）÷ 10⁶。KV KB/token = 2 × 层数 × KV 头数 × 头维 × 2 字节 ÷ 1024。</div>
+    </div>
+    <div id="ch_box" hidden>
+      <div class="pgroup"><h3>自定义硬件（单卡）</h3></div>
+      <div class="fields">
+        <label for="ch_mem">显存 GB<input id="ch_mem" inputmode="decimal"></label>
+        <label for="ch_bw">带宽 GB/s<input id="ch_bw" inputmode="decimal"></label>
+        <label for="ch_tf">BF16 稠密 TFLOPS<input id="ch_tf" inputmode="decimal"></label>
+      </div>
+    </div>
+  </details>
+
+  <details>
+    <summary>画像参数（每类可改）›</summary>
+    <div id="pfields"></div>
+  </details>
+
+  <details>
+    <summary>各画像贡献与日 token 量 ›</summary>
+    <div class="scroll"><table><thead><tr><th>画像</th><th>在线</th><th>占槽</th><th>prefill</th><th>解码</th></tr></thead><tbody id="brk"></tbody></table></div>
+    <div class="inner-note">占槽 = 平均同时占用的槽位；prefill、解码单位 tok/s。</div>
+    <div class="inner-note" id="daily"></div>
+  </details>
+
+  <button class="reset" id="reset" type="button">恢复默认</button>
+
+  <div class="note"><b>怎么读结论。</b>这是粗估，用来排除明显不够的方案、确定量级；定方案前用 capplan 的 <code>tune</code> 和 <code>bench</code> 按实测曲线细算。最少卡数取显存、带宽、算力三项里最大的一项（标蓝的就是瓶颈），并按张量并行向上取 1、2、4、8 张。</div>
+  <div class="note"><b>换算口径。</b>显存 =（权重 + KV 推荐池）÷ 0.9。带宽 = 单流速度 × 每步读取字节 ÷ 0.6，每步读取 = 被激活的权重 + 在跑请求的 KV（最低池）；MoE 在并发时各条流激活的专家不同，按 1 −（1 − 激活比）<sup>槽位</sup> 估算被读到的权重比例。算力 = 冷 prefill 吞吐 ×（2 × 激活参数 + 注意力开销）÷ 0.4。多卡时每加一张按 85% 效率计。</div>
+  <div class="note"><b>画像依据。</b>OpenRouter《State of AI》平均 prompt 6K+、输出约 400；编码 Agent 取 TraceLab（中位 119K 缓存前缀 / 875 新增 / 214 输出）与 GitHub Copilot 轨迹（中位 68K / 247）。每人每小时次数、在线率、RAG 与长文档画像为经验假设，有网关日志时优先校准。每次占槽时长 = 首 token 目标 + 输出 ÷ 单流速度。</div>
+  <div class="note" id="ver"></div>
+</main>
+<script>
+(function(){
+var VER="v2.0 · 2026-11-07";
+var DEF=[
+ {id:"light",name:"轻度问答",note:"翻译、查询、短对话",users:10,pres:0.7,rph:6,ctx:1500,nw:500,out:400},
+ {id:"doc",name:"文档/知识问答",note:"贴文档、改写、分析",users:30,pres:0.8,rph:12,ctx:6000,nw:1500,out:500},
+ {id:"rag",name:"RAG 检索问答",note:"检索片段每次更新",users:0,pres:0.7,rph:10,ctx:9000,nw:7000,out:600},
+ {id:"code",name:"编码助手（对话）",note:"IDE 内问答",users:0,pres:0.8,rph:15,ctx:20000,nw:3000,out:800},
+ {id:"agent",name:"编码 Agent",note:"一次 = 一次 LLM 调用",users:5,pres:0.8,rph:60,ctx:70000,nw:900,out:500},
+ {id:"long",name:"长文档分析",note:"合同、报告整本读",users:0,pres:0.5,rph:3,ctx:60000,nw:50000,out:1500}
+];
+var PF=[["pres","在线率"],["rph","次/人·时"],["ctx","上下文"],["nw","新增"],["out","输出"]];
+/* 模型预设：tot/act 十亿参数；kv = BF16 下 KB/token；attn = 2·L·H·(dqk+dv)/1e6；ctx = 支持窗口 K token */
+var MODELS=[
+ {id:"qwen3-8b",name:"Qwen3-8B（稠密）",tot:8.2,act:8.2,kv:144,attn:0.59,ctx:128,native:32},
+ {id:"qwen3-32b",name:"Qwen3-32B（稠密）",tot:32.8,act:32.8,kv:256,attn:2.10,ctx:128,native:32},
+ {id:"llama33-70b",name:"Llama-3.3-70B（稠密）",tot:70.6,act:70.6,kv:320,attn:2.62,ctx:128},
+ {id:"qwen3-30b-a3b",name:"Qwen3-30B-A3B（MoE）",tot:30.5,act:3.3,kv:96,attn:0.79,ctx:128,native:32},
+ {id:"qwen3-235b-a22b",name:"Qwen3-235B-A22B（MoE）",tot:235,act:22,kv:188,attn:3.08,ctx:128,native:32},
+ {id:"deepseek-v3",name:"DeepSeek-V3/R1 671B（MoE·MLA）",tot:671,act:37,kv:68.6,attn:5.00,ctx:128},
+ {id:"custom",name:"自定义（在高级口径里填）"}
+];
+var QUANT=[{id:"bf16",name:"BF16",b:2},{id:"fp8",name:"FP8",b:1},{id:"int4",name:"INT4（AWQ/GPTQ）",b:0.56}];
+/* 硬件预设（单卡）：mem GB，bw GB/s，tf = BF16 稠密 TFLOPS */
+var HW=[
+ {id:"4090",name:"RTX 4090 24GB",short:"4090",mem:24,bw:1008,tf:165},
+ {id:"5090",name:"RTX 5090 32GB",short:"5090",mem:32,bw:1792,tf:209},
+ {id:"pro6000",name:"RTX PRO 6000 96GB（服务器版）",short:"PRO6000",mem:96,bw:1597,tf:500},
+ {id:"h20",name:"H20 96GB",short:"H20",mem:96,bw:4000,tf:148},
+ {id:"910b",name:"昇腾 910B 64GB（规格取常见值）",short:"910B",mem:64,bw:1600,tf:320},
+ {id:"h100",name:"H100 SXM 80GB",short:"H100",mem:80,bw:3350,tf:989},
+ {id:"h200",name:"H200 SXM 141GB",short:"H200",mem:141,bw:4800,tf:989},
+ {id:"custom",name:"自定义（在高级口径里填）"}
+];
+var SDEF={model:"qwen3-32b",quant:"fp8",hw:"pro6000",v:30,ttft:3,kvq:"2",q:0.99,hit:0.9,pf:0.3,cv:0.9,h:8,
+  cm_tot:32,cm_act:32,cm_kv:256,cm_attn:2.1,cm_ctx:128,ch_mem:96,ch_bw:1792,ch_tf:250};
+var SKEYS=["v","ttft","q","hit","pf","cv","h"],CMK=["cm_tot","cm_act","cm_kv","cm_attn","cm_ctx"],CHK=["ch_mem","ch_bw","ch_tf"];
+var LS="llm_sizer_v2";
+var rows,S;
+function clone(x){return JSON.parse(JSON.stringify(x));}
+function load(){
+  rows=clone(DEF);S=clone(SDEF);
+  try{
+    var d=JSON.parse(localStorage.getItem(LS)||"null");
+    if(d&&d.v===2){
+      rows.forEach(function(r){var o=(d.rows||{})[r.id];if(o){["users"].concat(PF.map(function(f){return f[0];})).forEach(function(k){if(isFinite(o[k]))r[k]=o[k];});}});
+      Object.keys(SDEF).forEach(function(k){if(d.s&&d.s[k]!==undefined)S[k]=d.s[k];});
+    }
+  }catch(e){}
+}
+function save(){
+  try{var o={};rows.forEach(function(r){var x={users:r.users};PF.forEach(function(f){x[f[0]]=r[f[0]];});o[r.id]=x;});
+    localStorage.setItem(LS,JSON.stringify({v:2,rows:o,s:S}));}catch(e){}
+}
+function $(id){return document.getElementById(id);}
+function opts(sel,list,val){sel.innerHTML=list.map(function(m){return '<option value="'+m.id+'"'+(m.id===val?" selected":"")+'>'+m.name+'</option>';}).join("");}
+function build(){
+  var P=$("profs");P.innerHTML="";var F=$("pfields");F.innerHTML="";
+  rows.forEach(function(r,i){
+    var d=document.createElement("div");d.className="prof";
+    d.innerHTML='<div><b>'+r.name+'</b><span>'+r.note+'</span></div><div class="step"><button type="button" aria-label="'+r.name+' 减少" data-i="'+i+'" data-d="-1">−</button><input id="u_'+r.id+'" inputmode="numeric" value="'+r.users+'" aria-label="'+r.name+' 人数"><button type="button" aria-label="'+r.name+' 增加" data-i="'+i+'" data-d="1">+</button></div>';
+    P.appendChild(d);
+    var g=document.createElement("div");g.className="pgroup";
+    g.innerHTML='<h3>'+r.name+'</h3><div class="fields" style="padding:0">'+PF.map(function(f){return '<label for="'+r.id+'_'+f[0]+'">'+f[1]+'<input id="'+r.id+'_'+f[0]+'" inputmode="decimal" value="'+r[f[0]]+'"></label>';}).join("")+'</div>';
+    F.appendChild(g);
+  });
+  Array.prototype.forEach.call(document.querySelectorAll(".step button"),function(b){
+    b.addEventListener("click",function(){var i=+b.getAttribute("data-i"),el=$("u_"+rows[i].id);
+      var cur=parseFloat(el.value)||0,step=cur>=20?5:1;el.value=Math.max(0,cur+step*(+b.getAttribute("data-d")));calc();});
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("#profs input,#pfields input"),function(el){el.addEventListener("input",calc);});
+  opts($("s_model"),MODELS,S.model);opts($("s_quant"),QUANT,S.quant);opts($("s_hw"),HW,S.hw);$("s_kvq").value=S.kvq;
+  SKEYS.concat(CMK,CHK).forEach(function(k){var el=$(k.indexOf("_")>0?k:"s_"+k);if(el)el.value=S[k];});
+}
+function num(id,d){var el=$(id);var v=el?parseFloat(el.value):NaN;return isFinite(v)?v:d;}
+function find(list,id){for(var i=0;i<list.length;i++)if(list[i].id===id)return list[i];return list[0];}
+function lnq(m,cv,z){if(m<=0)return 0;var s=Math.sqrt(Math.log(1+cv*cv));return m*Math.exp(s*z-s*s/2);}
+function lgam(x){var c=[76.18009172947146,-86.50532032941677,24.01409824083091,-1.231739572450155,0.1208650973866179e-2,-0.5395239384953e-5];var y=x,t=x+5.5;t-=(x+0.5)*Math.log(t);var s=1.000000000190015;for(var j=0;j<6;j++)s+=c[j]/++y;return -t+Math.log(2.5066282746310005*s/x);}
+function conv(a,b){var o=new Array(a.length+b.length-1).fill(0);for(var i=0;i<a.length;i++){if(a[i]<1e-16)continue;for(var j=0;j<b.length;j++)o[i+j]+=a[i]*b[j];}return o;}
+function binom(n,p){var k=Math.floor(n+1e-9),fr=n-k,out=[];p=Math.min(Math.max(p,0),1);
+  if(p<=0){out=[1];for(var i=0;i<k;i++)out.push(0);}else if(p>=1){for(var j=0;j<k;j++)out.push(0);out.push(1);}else{var lp=Math.log(p),lq=Math.log(1-p),lg=lgam(k+1);for(var t=0;t<=k;t++)out.push(Math.exp(lg-lgam(t+1)-lgam(k-t+1)+t*lp+(k-t)*lq));}
+  if(fr>1e-9)out=conv(out,[1-fr*p,fr*p]);return out;}
+function q(pmf,qq){var s=0;for(var k=0;k<pmf.length;k++){s+=pmf[k];if(s>=qq-1e-12)return k;}return pmf.length-1;}
+function nice(t){var L=[];for(var b=4096;b<=4*1048576;b*=2)L.push(b,b*1.5);L.sort(function(a,b){return a-b});for(var i=0;i<L.length;i++)if(L[i]>=t)return L[i];return t;}
+function fT(x){if(x>=1e9)return(x/1e9).toFixed(2)+"B";if(x>=1e6)return(x/1e6).toFixed(2)+"M";if(x>=1e4)return Math.round(x/1e3)+"K";if(x>=1e3)return(x/1e3).toFixed(1)+"K";return Math.round(x)+"";}
+function fn(x){return Math.round(x).toLocaleString("zh-CN");}
+function f1(x){return x>=100?fn(x):x>=10?x.toFixed(0):x.toFixed(1);}
+function readS(){
+  S.model=$("s_model").value;S.quant=$("s_quant").value;S.hw=$("s_hw").value;S.kvq=$("s_kvq").value;
+  SKEYS.forEach(function(k){S[k]=num("s_"+k,SDEF[k]);});
+  CMK.concat(CHK).forEach(function(k){S[k]=num(k,SDEF[k]);});
+  $("cm_box").hidden=S.model!=="custom";$("ch_box").hidden=S.hw!=="custom";
+}
+function modelOf(id){var m=find(MODELS,id);if(m.id!=="custom")return m;
+  return {id:"custom",name:"自定义模型",tot:S.cm_tot,act:Math.min(S.cm_act,S.cm_tot),kv:S.cm_kv,attn:S.cm_attn,ctx:S.cm_ctx};}
+function hwOf(id){var h=find(HW,id);if(h.id!=="custom")return h;return {id:"custom",name:"自定义硬件",short:"自定义卡",mem:S.ch_mem,bw:S.ch_bw,tf:S.ch_tf};}
+/* 需求规格：与硬件、模型都无关 */
+function spec(){
+  var v=Math.max(S.v,1),ttft=Math.max(S.ttft,0.1),qq=Math.min(Math.max(S.q,0.5),0.999),
+      hit=Math.min(Math.max(S.hit,0),1),pfcap=Math.min(Math.max(S.pf,0.05),0.9),hours=Math.max(S.h,1),cv=Math.max(S.cv,0);
+  var o={v:v,pmf:[1],dec:0,pre:0,pin:0,mu:0,va:0,ret:0,mml:0,maxFresh:0,busyAll:0,agentBusy:0,reqs:0,brk:[],attnCtx:0,hours:hours};
+  rows.forEach(function(r){
+    if(r.users<=0)return;
+    var n=r.users*Math.min(Math.max(r.pres,0),1),R=ttft+r.out/v,lam=n*r.rph/3600,p=Math.min(lam*R/Math.max(n,1e-9),0.97);
+    var fresh=hit*r.nw+(1-hit)*r.ctx,S2=r.ctx+r.out;
+    o.pmf=conv(o.pmf,binom(n,p));o.dec+=lam*r.out;o.pre+=lam*fresh;o.pin+=lam*r.ctx;o.reqs+=lam;
+    o.attnCtx+=lam*fresh*Math.max(r.ctx-fresh/2,0);
+    o.mu+=n*p*S2;o.va+=n*(p*S2*S2*(1+cv*cv)-p*p*S2*S2);o.ret+=n*(1-p)*S2;
+    o.mml=Math.max(o.mml,lnq(S2,cv,2.3263)*1.2);o.maxFresh=Math.max(o.maxFresh,lnq(r.nw,cv,1.2816));
+    o.busyAll+=n*p;if(r.id==="agent")o.agentBusy+=n*p;
+    o.brk.push([r.name,n,n*p,lam*fresh,lam*r.out]);
+  });
+  o.slots=Math.max(q(o.pmf,qq),1);o.Kmean=o.pmf.reduce(function(s,x,k){return s+k*x},0);
+  o.kvMin=o.mu+2.3263*Math.sqrt(Math.max(o.va,0));o.kvRec=(o.kvMin+o.ret*0.9)*1.1;
+  o.pfReq=Math.max(o.pre/pfcap,o.maxFresh/ttft);o.ctxCap=nice(o.mml);o.qq=qq;
+  o.attnAvg=o.pre>0?o.attnCtx/o.pre:0;
+  return o;
+}
+var EFF_BW=0.6,EFF_TF=0.4,MEM_UTIL=0.9,TP_EFF=0.85;
+function cardsFor(need,per){if(need<=0)return 1;if(need<=per)return 1;return Math.ceil(need/(per*TP_EFF));}
+function pow2(n){var p=1;while(p<n)p*=2;return p;}
+/* 选型：给定模型 + 精度 + 硬件，换算成显存/带宽/算力需求和最少卡数 */
+function sizing(o,m,qb,kvb,hw){
+  var GB=1e9,kvB=m.kv*1024*kvb/2;
+  var wGB=m.tot*qb;
+  var kvRecGB=o.kvRec*kvB/GB,kvMinGB=o.kvMin*kvB/GB;
+  var mem=(wGB+kvRecGB)/MEM_UTIL;
+  var r=m.act/m.tot,touched=r>=0.999?1:Math.max(r,1-Math.pow(1-r,o.slots));
+  var wStepGB=m.tot*qb*touched;
+  var bw=o.v*(wStepGB+kvMinGB)/EFF_BW;
+  var flopsTok=2*m.act*1e9+m.attn*1e6*o.attnAvg;
+  var tf=o.pfReq*flopsTok/EFF_TF/1e12;
+  var n=[cardsFor(mem,hw.mem),cardsFor(bw,hw.bw),cardsFor(tf,hw.tf)];
+  var raw=Math.max(n[0],n[1],n[2]),bind=n.indexOf(raw);
+  return {wGB:wGB,kvRecGB:kvRecGB,kvMinGB:kvMinGB,mem:mem,bw:bw,tf:tf,n:n,raw:raw,cards:pow2(raw),bind:bind,
+    kvShareBw:(kvMinGB)/(wStepGB+kvMinGB),touched:touched,attnShare:(m.attn*1e6*o.attnAvg)/flopsTok};
+}
+function calc(){
+  rows.forEach(function(r){r.users=Math.max(0,num("u_"+r.id,0));PF.forEach(function(f){r[f[0]]=num(r.id+"_"+f[0],r[f[0]]);});});
+  readS();save();
+  var o=spec(),m=modelOf(S.model),hw=hwOf(S.hw),qb=find(QUANT,S.quant).b,kvb=+S.kvq;
+  var z=sizing(o,m,qb,kvb,hw);
+  var BN=["显存","带宽","算力"];
+  $("t_slots").textContent=o.slots;
+  $("t_mem").textContent=fn(z.mem)+" GB";
+  $("t_cards").textContent=z.cards>8?">8 卡":z.cards+"×"+hw.short;
+  var over=z.cards>8;
+  var big=over?"单机 8 张 "+hw.short+" 不够":"最少 "+z.cards+" × "+hw.name;
+  var sub=m.name+" · "+find(QUANT,S.quant).name+" 权重 · "+(kvb===1?"FP8":"BF16")+" KV；瓶颈在"+BN[z.bind]+
+    (z.raw!==z.cards?"（按 "+z.raw+" 张算，张量并行取 "+z.cards+" 张）":"")+
+    (over?"。可以换更小或 MoE 模型、降低权重精度、降低单流目标，或按多机部署。":"。");
+  var lines=[
+    ["显存 ≥ "+fn(z.mem)+" GB","权重 "+fn(z.wGB)+" + KV 推荐 "+fn(z.kvRecGB)+" GB，再除以 0.9 留出运行开销；单卡 "+hw.mem+" GB",z.n[0]],
+    ["带宽 ≥ "+(z.bw/1000).toFixed(z.bw>=10000?0:1)+" TB/s","每步读权重"+(z.touched<1?"（并发下约 "+Math.round(z.touched*100)+"% 的专家被激活）":"")+" + 在跑 KV，KV 占 "+Math.round(z.kvShareBw*100)+"%；单卡 "+fn(hw.bw)+" GB/s",z.n[1]],
+    ["算力 ≥ "+fn(z.tf)+" TFLOPS","冷 prefill "+fn(o.pfReq)+" tok/s，注意力占 "+Math.round(z.attnShare*100)+"%；单卡 "+hw.tf+" TFLOPS（BF16 稠密）",z.n[2]]
+  ];
+  $("verdict").innerHTML='<div class="verdict'+(over?" bad":"")+'"><div class="big">'+big+'</div><div class="sub">'+sub+'</div></div>'+
+    lines.map(function(l,i){return '<div class="need"><div class="v">'+l[0]+'</div><div class="n'+(i===z.bind?" bind":"")+'">'+l[2]+' 张</div><div class="d">'+l[1]+'</div></div>';}).join("");
+  /* 结论提示 */
+  var F=[];
+  if(m.native&&o.ctxCap>m.native*1024&&o.ctxCap<=m.ctx*1024)F.push("上下文上限 "+fT(o.ctxCap)+" 超过 "+m.name+" 的原生 "+m.native+"K，需要开 YaRN 扩展（vLLM 用 rope_scaling 参数）。");
+  if(o.ctxCap>m.ctx*1024)F.push("上下文上限 "+fT(o.ctxCap)+" 超过 "+m.name+" 支持的 "+m.ctx+"K。核对是否真需要这么长；不需要就在高级口径里调低 CV。");
+  if(z.bind===1&&z.kvShareBw>0.5)F.push("带宽需求里 KV 读取占 "+Math.round(z.kvShareBw*100)+"%：长上下文请求同时在跑。KV 改 FP8、限制 agent 并发或降低单流目标，比换更大的模型或卡更有效。");
+  if(z.bind===2)F.push("瓶颈在 prefill 算力：缓存命中率对结果影响最大，先确认网关和引擎开了前缀缓存，并按实际命中率修改高级口径。");
+  if(o.busyAll>0&&o.agentBusy/o.busyAll>0.4)F.push("编码 Agent 占 "+Math.round(100*o.agentBusy/o.busyAll)+"% 的槽位：建议网关按 key 限并发。");
+  $("flags").innerHTML=F.length?F.map(function(t){return '<div class="flag">'+t+'</div>';}).join(""):'<div class="flag ok">各项需求之间没有明显失衡。</div>';
+  /* 换模型对比 */
+  $("cmp").innerHTML=MODELS.filter(function(x){return x.id!=="custom"||S.model==="custom";}).map(function(x){
+    var mm=modelOf(x.id),zz=sizing(o,mm,qb,kvb,hw);
+    return '<tr'+(x.id===S.model?' class="sel"':'')+'><td>'+mm.name+'</td><td>'+fn(zz.mem)+'</td><td>'+(zz.bw/1000).toFixed(1)+'</td><td>'+fn(zz.tf)+'</td><td>'+(zz.cards>8?">8":zz.cards)+'</td></tr>';
+  }).join("");
+  /* 需求规格 */
+  var items=[
+    ["并发槽位（max_num_seqs）",o.slots,"p"+Math.round(o.qq*100)+" 同时在跑；平均 "+o.Kmean.toFixed(1)],
+    ["单流解码速度",o.v+" tok/s","并发 "+o.slots+" 时每条流仍需达到"],
+    ["峰值聚合解码",fn(o.slots*o.v)+" tok/s","平均实际需求 "+fn(o.dec)+" tok/s"],
+    ["冷 prefill 吞吐",fn(o.pfReq)+" tok/s","平均新鲜 prefill "+fn(o.pre)+" tok/s"],
+    ["上下文上限（max_model_len）",fT(o.ctxCap),"(上下文+输出) p99 × 1.2"],
+    ["KV 池 最低 / 推荐",fT(o.kvMin)+" / "+fT(o.kvRec)+" token","最低：在跑请求不被抢占；推荐：用户思考间隙也保住缓存"]
+  ];
+  $("kpis").innerHTML=items.map(function(it){return '<div class="kpi"><div class="k">'+it[0]+'</div><div class="v">'+it[1]+'</div><div class="d">'+it[2]+'</div></div>';}).join("");
+  $("brk").innerHTML=o.brk.map(function(b){return "<tr><td>"+b[0]+"</td><td>"+b[1].toFixed(1)+"</td><td>"+b[2].toFixed(2)+"</td><td>"+fn(b[3])+"</td><td>"+fn(b[4])+"</td></tr>";}).join("");
+  $("daily").textContent="日 token 量（按每天 "+o.hours+" 小时）：输入 "+fT(o.pin*3600*o.hours)+"，输出 "+fT(o.dec*3600*o.hours)+"，需重算 prefill "+fT(o.pre*3600*o.hours)+"；约 "+fn(o.reqs*3600*o.hours)+" 次请求/天。";
+}
+load();build();
+Array.prototype.forEach.call(document.querySelectorAll("main > .card .fields input, main > .card .fields select, details .fields input, details .fields select"),function(el){
+  el.addEventListener(el.tagName==="SELECT"?"change":"input",calc);
+});
+$("reset").addEventListener("click",function(){try{localStorage.removeItem(LS);}catch(e){}rows=clone(DEF);S=clone(SDEF);build();calc();});
+$("ver").textContent=VER;
+calc();
+window.__llmSizer={spec:spec,sizing:sizing,MODELS:MODELS,HW:HW,QUANT:QUANT,modelOf:modelOf,hwOf:hwOf,S:function(){return S;},calc:calc};
+})();
+if("serviceWorker" in navigator&&location.protocol!=="file:"){navigator.serviceWorker.register("sw.js").catch(function(){});}
+</script>
+</body>
+</html>
